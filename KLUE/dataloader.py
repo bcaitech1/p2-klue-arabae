@@ -1,9 +1,12 @@
-import pickle as pickle
+
 import os
-import pandas as pd
 import torch
-from sklearn.model_selection import train_test_split
+import pandas as pd
+import pickle as pickle
+
+from tokenizers import *
 from torch.utils.data import Dataset, DataLoader
+from sklearn.model_selection import train_test_split
 
 
 # Dataset 구성.
@@ -31,7 +34,7 @@ def preprocessing_dataset(dataset, label_type):
         else:
             label.append(label_type[i])
     out_dataset = pd.DataFrame(
-        {'sentence': dataset[1], 'entity_01': dataset[2], 'entity_02': dataset[5], 'label': label, })
+        {'sentence': dataset[1], 'entity_01': dataset[2], 'entity_02': dataset[5], 'label': label,})
     return out_dataset
 
 
@@ -47,13 +50,12 @@ def load_data(dataset_dir):
 
     return dataset
 
-
-# bert input을 위한 tokenizing.
-def tokenized_dataset(dataset, tokenizer):
+# tokenizing.
+def tokenized_dataset(dataset, betweent_entity, tokenizer):
     concat_entity = []
     for e01, e02 in zip(dataset['entity_01'], dataset['entity_02']):
         temp = ''
-        temp = e01 + '[SEP]' + e02
+        temp = e01 + betweent_entity + e02
         concat_entity.append(temp)
 
     tokenized_sentences = tokenizer(
@@ -66,25 +68,48 @@ def tokenized_dataset(dataset, tokenizer):
         add_special_tokens=True
     )
     return tokenized_sentences
+	
 
 
-def get_trainLoader(train_dataset, train_label, valid_ratio, tokenizer):
+def get_trainLoader(args, train_data, valid_data, train_label, valid_label, tokenizer):
     # tokenizing dataset
-    train_data, valid_data, train_label, valid_label = train_test_split(train_dataset, train_label, test_size=valid_ratio, shuffle=True)
-    tokenized_train = tokenized_dataset(train_data, tokenizer)
-    tokenized_valid = tokenized_dataset(valid_data, tokenizer)
+	# ---------------- 기존의 train data 비율에 맞게 augmentation ----------------
+    if args.isAug:
+        train_num = len(train_data)
+        train_pieces = dict(list(train_data.groupby('label')))
+        
+        aug_dataset = load_data("../input/data/aug/aug1.tsv")
+        pieces = dict(list(aug_dataset.groupby('label')))
+        
+        for i in pieces.keys():
+            df_shuffled = pieces[i].sample(frac=len(train_pieces[i])/train_num).reset_index(drop=True)
+            train_data = pd.concat([train_data, df_shuffled])
+    
+    # remove under 8 samples
+    del_labels = []
+    train_pieces = dict(list(train_data.groupby('label')))
+    for i in train_pieces.keys():
+        if len(train_pieces[i]) < 8:
+            del_labels.append(i)
+    train_data[~train_data['label'].isin(del_labels)]
+	
+	betweent_entity = '</s></s>' if args.model == 'xlm' else '[SEP]'
+    tokenized_train = tokenized_dataset(train_data, betweent_entity, tokenizer)
+    tokenized_valid = tokenized_dataset(valid_data, betweent_entity, tokenizer)
 
     # make dataset for pytorch.
     RE_train_dataset = RE_Dataset(tokenized_train, train_label)
     RE_valid_dataset = RE_Dataset(tokenized_valid, valid_label)
 
     trainloader = DataLoader(RE_train_dataset,
-                             batch_size=32,
-                             shuffle=True
+                             batch_size=args.batch_size,
+                             shuffle=True,
+                             num_workers=4
                              )
 
     validloader = DataLoader(RE_valid_dataset,
-                             shuffle=False
+                             shuffle=False,
+                             num_workers=4
                              )
 
     return trainloader, validloader
