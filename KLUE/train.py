@@ -9,13 +9,14 @@ import torch.nn as nn
 
 from sklearn.metrics import accuracy_score
 
-from dataloader import load_data, get_trainLoader
-from model import BERTClassifier
-from tokenization_kobert import KoBertTokenizer
-from transformers import BertModel
+from loss import *
+from model import *
+from dataloader import *
+from transformers import AutoTokenizer, BertModel, ElectraModel, RobertaModel
 
 sys.path.append('/opt/ml/klue-baseline')
 from evaluation import test_main
+
 
 def str2bool(v):
     if v.lower() in ('yes', 'true', 'y', 't', '1'):
@@ -42,145 +43,154 @@ def seed_everything(seed):
     random.seed(seed)
 
 
-def train(model, optimizer, criterion, trainloader, validloader, Epochs, model_name, wandb):
-    total_batch_ = len(trainloader)
-    valid_batch_ = len(validloader)
+def train(args, criterion, wandb):
+	tokenizer = get_tokenizer(args)
+	
+    if 'ner' in args.train_file:
+        all_dataset = ner_load_data(f"{args.train_dir}/{args.train_file}.tsv")
+    else:
+        all_dataset = load_data(f"{args.train_dir}/{args.train_file}.tsv")
+    all_label = all_dataset['label'].values
+    
+    kf = StratifiedKFold(n_splits=8, random_state=42, shuffle=True)
+    fold_idx = 1
 
-    model.cuda()
+    for train_index, test_index in kf.split(all_dataset, all_label):
+        
+        os.makedirs(f'./models/{args.model_name}/{fold_idx}-fold', exist_ok=True)
+        ### Model Select
+		model = get_model(args)
+        model.cuda()
+        
+		### Optimizer
+		optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+        
+        train_data, valid_data = all_dataset.iloc[train_index], all_dataset.iloc[test_index]
+        train_label, valid_label = all_label[train_index], all_label[test_index]
 
-    for i in range(Epochs + 1):
-        model.train()
-        epoch_perform, batch_perform = np.zeros(2), np.zeros(2)
+        trainloader, validloader = get_trainLoader(args, train_data, valid_data, train_label, valid_label, tokenizer)
 
-        for j, v in enumerate(trainloader):
-            input_ids, attention_mask, token_type_ids, labels = v['input_ids'].cuda(), v['attention_mask'].cuda(), v[
-                'token_type_ids'].cuda(), v['labels'].cuda()
-            optimizer.zero_grad()
-            output = model(input_ids, attention_mask, token_type_ids)
+        total_batch_ = len(trainloader)
+        valid_batch_ = len(validloader)
+        
+        best_val_loss, best_val_acc = np.inf, 0
+    
+        print(f"---------------------------------- {fold_idx} ----------------------------------")
 
-            loss = criterion(output, labels)
-            loss.backward()
-            optimizer.step()
+		for i in range(args.epochs + 1):
+			model.train()
+			epoch_perform, batch_perform = np.zeros(2), np.zeros(2)
 
-            predict = output.argmax(dim=-1)
-            predict = predict.detach().cpu().numpy()
-            labels = labels.detach().cpu().numpy()
+			for j, v in enumerate(trainloader):
+				input_ids, attention_mask, labels = v['input_ids'].cuda(), v['attention_mask'].cuda(), v['labels'].cuda()
+				
+				if args.model == 'roberta' or args.model == 'r_roberta':
+					token_type_ids = None
+				else:
+					token_type_ids = v['token_type_ids'].cuda()
+				optimizer.zero_grad()
+				
+				output = model(input_ids, attention_mask, token_type_ids) ## label을 안 넣어서 logits값만 출력
 
-            acc = accuracy_score(labels, predict)
+				loss = criterion(output, labels)
+				loss.backward()
+				optimizer.step()
 
-            batch_perform += np.array([loss.item(), acc])
-            epoch_perform += np.array([loss.item(), acc])
+				predict = output.argmax(dim=-1)
+				predict = predict.detach().cpu().numpy()
+				labels = labels.detach().cpu().numpy()
 
-            if (j + 1) % 50 == 0:
-                print(
-                    f"Epoch {i:#04d} #{j + 1:#03d} -- loss: {batch_perform[0] / 50:#.5f}, acc: {batch_perform[1] / 50:#.2f}")
-                batch_perform = np.zeros(2)
-        print(
-            f"Epoch {i:#04d} loss: {epoch_perform[0] / total_batch_:#.5f}, acc: {epoch_perform[1] / total_batch_:#.2f}")
-        wandb.log({
-            "Train epoch Loss": epoch_perform[0] / total_batch_,
-            "Train epoch Acc": epoch_perform[1] / total_batch_})
-        ###### Validation
+				acc = accuracy_score(labels, predict)
 
-        model.eval()
-        valid_perform = np.zeros(2)
-        with torch.no_grad():
-            for v in validloader:
-                input_ids, attention_mask, token_type_ids, valid_labels = v['input_ids'].cuda(), v['attention_mask'].cuda(), \
-                                                                    v['token_type_ids'].cuda(), v['labels'].cuda()
-                valid_output = model(input_ids, attention_mask, token_type_ids)
-                valid_loss = criterion(valid_output, valid_labels)
+				batch_perform += np.array([loss.item(), acc])
+				epoch_perform += np.array([loss.item(), acc])
 
-                valid_predict = valid_output.argmax(dim=-1)
-                valid_predict = valid_predict.detach().cpu().numpy()
-                valid_labels = valid_labels.detach().cpu().numpy()
+				if (j + 1) % 50 == 0:
+					print(
+						f"Epoch {i:#04d} #{j + 1:#03d} -- loss: {batch_perform[0] / 50:#.5f}, acc: {batch_perform[1] / 50:#.4f}")
+					batch_perform = np.zeros(2)
+			
+			print(
+				f"Epoch {i:#04d} loss: {epoch_perform[0] / total_batch_:#.5f}, acc: {epoch_perform[1] / total_batch_:#.2f}")
+			wandb.log({
+				"epoch": i,
+				"Train epoch Loss": epoch_perform[0] / total_batch_,
+				"Train epoch Acc": epoch_perform[1] / total_batch_})
+			###### Validation
 
-                valid_acc = accuracy_score(valid_labels, valid_predict)
+			model.eval()
+			valid_perform = np.zeros(2)
+			with torch.no_grad():
+				for v in validloader:
+					input_ids, attention_mask, valid_labels = v['input_ids'].cuda(), v['attention_mask'].cuda(), v['labels'].cuda()
+				
+					if args.model == 'roberta' or args.model == 'r_roberta':
+						token_type_ids = None
+					else:
+						token_type_ids = v['token_type_ids'].cuda()
+					
+					valid_output = model(input_ids, attention_mask, token_type_ids)
+					valid_loss = criterion(valid_output, valid_labels)
 
-                valid_perform += np.array([valid_loss.item(), valid_acc])
+					valid_predict = valid_output.argmax(dim=-1)
+					valid_predict = valid_predict.detach().cpu().numpy()
+					valid_labels = valid_labels.detach().cpu().numpy()
 
-            print(
-                f">>>> Validation loss: {valid_perform[0] / valid_batch_:#.5f}, Acc: {valid_perform[1] / valid_batch_:#.2f}")
-            print()
-            wandb.log({
-                "Valid Loss": valid_perform[0] / valid_batch_,
-                "Valid Acc": valid_perform[1] / valid_batch_})
+					valid_acc = accuracy_score(valid_labels, valid_predict)
 
-        ###### Model save
-        if i % 5 == 0:
-            save_path = f'./models/{model_name}/chkpt-{i}.pt'
-            torch.save(model.state_dict(), save_path)
-            print("---------------- Saved checkpoint to: %s ----------------" % save_path)
+					valid_perform += np.array([valid_loss.item(), valid_acc])
+
+			###### Model save
+			val_total_loss = valid_perform[0] / valid_batch_
+			val_total_acc = valid_perform[1] / valid_batch_
+			best_val_loss = min(best_val_loss, val_total_loss)
+
+			if val_total_acc > best_val_acc and val_total_acc >= 0.74:
+				print(f"New best model for val accuracy : {val_total_acc:#.4f}! saving the best model..")
+				torch.save(model.state_dict(), f"./models/{args.model_name}/{fold_idx}-fold/best.pt")
+				best_val_acc = val_total_acc
+		
+			print(
+				f">>>> Validation loss: {val_total_loss:#.5f}, Acc: {val_total_acc:#.4f}")
+			print()
+			wandb.log({
+				"epoch": i,
+				"Valid Loss": val_total_loss,
+				"Valid Acc": val_total_acc})
+				
+		fold_idx +=1
 
 
 
 if __name__ == '__main__':
     import wandb
-    wandb.init()
 
     parser = argparse.ArgumentParser()
-
+    parser.add_argument('--project_name', type=str, default='klue-baseline', help='wandb project name')
     parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
-    parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 10)')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='input batch size for training (default: 32)')
-    parser.add_argument('--token', type=str, default='kobert', help='tokenizer type (kobert; default)')
-    parser.add_argument('--model', type=str, default='kobert', help='model type (kobert; default)')
-    parser.add_argument('--optim', type=str, default='adam', help='optimizer type (sgd, adam; default, adamp)')
+    parser.add_argument('--epochs', type=int, default=10, help='number of epochs to train (default: 10)')
+    parser.add_argument('--batch_size', type=int, default=32, help='input batch size for training (default: 32)')
+    
+    parser.add_argument('--model', type=str, default='r_roberta', help='model type (kobert, koelectra, multi, roberta, r_roberta; default)')
     parser.add_argument('--lr', type=float, default=5e-5, help='learning rate (default: 5e-5)')
-    parser.add_argument('--val_ratio', type=float, default=0.1, help='ratio for validaton (default: 0.1)')
-    parser.add_argument('--loss', type=str, default='cross_entropy',
-                        help='criterion type (cross_entropy)')
-
-    parser.add_argument('--isTrain', type=str2bool, default=True, help='choose Train(true; default) or Test(false)')
+    parser.add_argument('--smoothing', type=float, default=0.5, help='smoothing level (default: 0.5)')
+    parser.add_argument('--dp', type=float, default=None, help='Dropout rate of Classifier (default: None)')
+    
     parser.add_argument('--train_dir', type=str, default='../input/data/train')
-    parser.add_argument('--test_dir', type=str, default='../input/data/test')
+	parser.add_argument('--isAug', type=str2bool, default=False, help='choose Augmentation(true) or Not(false; default)')
+    parser.add_argument('--train_dir', type=str, default='../input/data/train')
+    parser.add_argument('--train_file', type=str, default='train', help='choose train; default, gold_train, pororo_train, gold_pororo_train, ner_train')
+	
     parser.add_argument('--model_name', type=str, required=True)
-    parser.add_argument('--chpkt_idx', type=int, default=10, help='checkpoint of models for submit')
 
     args = parser.parse_args()
     print(args)
+    seed_everything(args.seed)
+
+    wandb.init(project=args.project_name)
     wandb.run.name = f'{args.model_name}'
     wandb.config.update(args)
+		
+	criterion = LabelSmoothingLoss(smoothing=args.smoothing)
+	train(args, criterion, wandb)
 
-    if args.token == 'kobert':
-        tokenizer = KoBertTokenizer.from_pretrained('monologg/kobert')
-    else:
-        raise NameError('Not a tokenizer available.')
-
-    if args.model == 'kobert':
-        pretrained_model = BertModel.from_pretrained("monologg/kobert")
-        model = BERTClassifier(pretrained_model)
-    else:
-        raise NameError('Not a model available.')
-
-    if args.isTrain:
-        os.makedirs(f'./models/{args.model_name}', exist_ok=True)
-
-        train_dataset = load_data(f"{args.train_dir}/train.tsv")
-        train_label = train_dataset['label'].values
-
-        if args.optim == 'sgd':
-            optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=0.9)
-        elif args.optim == 'adam':
-            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
-        else:
-            raise NameError('Not a optimizer available.')
-        '''
-        elif args.optim == 'adamp':
-            optimizer = AdamP(model.parameters(), lr=args.lr, betas=(0.9, 0.999), weight_decay=1e-2)
-        '''
-
-
-        if args.loss == 'cross_entropy':
-            criterion = nn.CrossEntropyLoss()
-        else:
-            raise NameError('Not a loss function available.')
-
-        seed_everything(args.seed)
-        trainloader, validloader = get_trainLoader(train_dataset, train_label, args.val_ratio, tokenizer)
-        train(model, optimizer, criterion, trainloader, validloader, args.epochs, args.model_name, wandb)
-
-    else:
-
-        test_main(model, tokenizer, args.model_name, str(args.chpkt_idx), args.test_dir)

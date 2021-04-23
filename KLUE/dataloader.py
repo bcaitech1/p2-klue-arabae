@@ -1,12 +1,9 @@
-
-import os
-import torch
-import pandas as pd
 import pickle as pickle
-
-from tokenizers import *
-from torch.utils.data import Dataset, DataLoader
+import os
+import pandas as pd
+import torch
 from sklearn.model_selection import train_test_split
+from torch.utils.data import Dataset, DataLoader
 
 
 # Dataset 구성.
@@ -45,17 +42,27 @@ def load_data(dataset_dir):
         label_type = pickle.load(f)
     # load dataset
     dataset = pd.read_csv(dataset_dir, delimiter='\t', header=None)
+    
     # preprecessing dataset
     dataset = preprocessing_dataset(dataset, label_type)
 
     return dataset
 
-# tokenizing.
-def tokenized_dataset(dataset, betweent_entity, tokenizer):
+
+# ner tag가 붙은 tsv 파일을 불러옵니다.
+def ner_load_data(dataset_dir):
+    dataset = pd.read_csv(dataset_dir, delimiter='\t', header=None)
+    dataset = pd.DataFrame(
+        {'sentence':dataset[0], 'entity_01': dataset[1], 'entity_02': dataset[2], 'label': dataset[3]})
+    return dataset
+
+
+# bert input을 위한 tokenizing.
+def tokenized_dataset(dataset, entity_between, tokenizer):
     concat_entity = []
     for e01, e02 in zip(dataset['entity_01'], dataset['entity_02']):
         temp = ''
-        temp = e01 + betweent_entity + e02
+        temp = e01 + entity_between + e02
         concat_entity.append(temp)
 
     tokenized_sentences = tokenizer(
@@ -68,12 +75,10 @@ def tokenized_dataset(dataset, betweent_entity, tokenizer):
         add_special_tokens=True
     )
     return tokenized_sentences
-	
 
 
 def get_trainLoader(args, train_data, valid_data, train_label, valid_label, tokenizer):
     # tokenizing dataset
-	# ---------------- 기존의 train data 비율에 맞게 augmentation ----------------
     if args.isAug:
         train_num = len(train_data)
         train_pieces = dict(list(train_data.groupby('label')))
@@ -86,16 +91,17 @@ def get_trainLoader(args, train_data, valid_data, train_label, valid_label, toke
             train_data = pd.concat([train_data, df_shuffled])
     
     # remove under 8 samples
+    '''
     del_labels = []
     train_pieces = dict(list(train_data.groupby('label')))
     for i in train_pieces.keys():
         if len(train_pieces[i]) < 8:
             del_labels.append(i)
     train_data[~train_data['label'].isin(del_labels)]
-	
-	betweent_entity = '</s></s>' if args.model == 'xlm' else '[SEP]'
-    tokenized_train = tokenized_dataset(train_data, betweent_entity, tokenizer)
-    tokenized_valid = tokenized_dataset(valid_data, betweent_entity, tokenizer)
+    '''
+    entity_between = '</s></s>' if args.model == 'r_roberta' or args.model == 'roberta' else '[SEP]'
+    tokenized_train = tokenized_dataset(train_data, entity_between, tokenizer)
+    tokenized_valid = tokenized_dataset(valid_data, entity_between, tokenizer)
 
     # make dataset for pytorch.
     RE_train_dataset = RE_Dataset(tokenized_train, train_label)
