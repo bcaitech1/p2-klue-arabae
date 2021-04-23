@@ -174,7 +174,7 @@ if __name__ == '__main__':
     parser.add_argument('--model', type=str, default='r_roberta', help='model type (kobert, koelectra, multi, roberta, r_roberta; default)')
     parser.add_argument('--lr', type=float, default=5e-5, help='learning rate (default: 5e-5)')
     parser.add_argument('--smoothing', type=float, default=0.5, help='smoothing level (default: 0.5)')
-    parser.add_argument('--dp', type=float, default=None, help='Dropout rate of Classifier (default: None)')
+    parser.add_argument('--dp', type=float, default=0.0, help='Dropout rate of Classifier (default: None)')
     
     parser.add_argument('--train_dir', type=str, default='../input/data/train')
 	parser.add_argument('--isAug', type=str2bool, default=False, help='choose Augmentation(true) or Not(false; default)')
