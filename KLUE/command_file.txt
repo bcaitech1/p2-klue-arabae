@@ -1,2 +1,0 @@
---model_name kfold --model roberta
---model_name r_kfold_gold --train_file gold_train --model r_roberta
