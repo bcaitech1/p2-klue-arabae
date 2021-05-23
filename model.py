@@ -13,10 +13,10 @@ class kobert_Classifier(nn.Module):
 
     def forward(self, token_ids, attention_mask, segment_ids):
         out = self.bert(input_ids=token_ids, attention_mask=attention_mask, token_type_ids=segment_ids)
-		
-		if self.dr_rate:
-			out = self.dropout(out)
-
+        
+        if self.dr_rate:
+            out = self.dropout(out)
+        
         return self.classifier(out)
     
 class koelectra_Classifier(nn.Module):
@@ -40,7 +40,7 @@ class koelectra_Classifier(nn.Module):
         out = self.pooler(out)
         out = torch.nn.functional.gelu(out)  # although BERT uses tanh here, it seems Electra authors used gelu here
         if self.dr_rate:
-			out = self.dropout(out)
+            out = self.dropout(out)
 
         return self.classifier(out)
 		
@@ -126,48 +126,48 @@ class r_roberta_Classifier(nn.Module):
 
 
 def get_tokenizer(args):
-	if args.model == 'kobert':
-		tokenizer = KoBertTokenizer.from_pretrained('monologg/kobert')
+    if args.model == 'kobert':
+        tokenizer = KoBertTokenizer.from_pretrained('monologg/kobert')
+    
+    elif args.model == 'multi':
+        tokenizer = AutoTokenizer.from_pretrained("sangrimlee/bert-base-multilingual-cased-korquad")
 		
-	elif args.model == 'multi':
-		tokenizer = AutoTokenizer.from_pretrained("sangrimlee/bert-base-multilingual-cased-korquad")
-		
-	elif args.models == 'koelectra':
-		tokenizer = AutoTokenizer.from_pretrained("monologg/koelectra-base-v3-discriminator")
-		
+    elif args.models == 'koelectra':
+        tokenizer = AutoTokenizer.from_pretrained("monologg/koelectra-base-v3-discriminator")
+    	
     elif args.model == 'r_roberta':
-		tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
-		
+        tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
+    
     elif args.model == 'roberta':
-		tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
-	
-	else:
-		raise NotImplementedError('Tokenizer & Model not available')
-	
-	return tokenizer
+        tokenizer = AutoTokenizer.from_pretrained("xlm-roberta-large")
+
+    else:
+    	raise NotImplementedError('Tokenizer & Model not available')
+
+    return tokenizer
 
 def get_model(args):
-	if args.model == 'kobert':
-		feature_model = BertModel.from_pretrained("monologg/kobert")
-		model = kobert_Classifier(feature_model, dr_rate=args.dp)
-		
-	elif args.model == 'multi':
-		feature_model = BertModel.from_pretrained("sangrimlee/bert-base-multilingual-cased-korquad")
-		model = kobert_Classifier(feature_model, dr_rate=args.dp)
-		
-	elif args.models == 'koelectra':
-		feature_model = ElectraModel.from_pretrained("monologg/koelectra-base-v3-discriminator")
-		model = koelectra_Classifier(feature_model, dr_rate=args.dp)
-		
+    if args.model == 'kobert':
+    	feature_model = BertModel.from_pretrained("monologg/kobert")
+    	model = kobert_Classifier(feature_model, dr_rate=args.dp)
+    
+    elif args.model == 'multi':
+    	feature_model = BertModel.from_pretrained("sangrimlee/bert-base-multilingual-cased-korquad")
+    	model = kobert_Classifier(feature_model, dr_rate=args.dp)
+    
+    elif args.models == 'koelectra':
+    	feature_model = ElectraModel.from_pretrained("monologg/koelectra-base-v3-discriminator")
+    	model = koelectra_Classifier(feature_model, dr_rate=args.dp)
+    
     elif args.model == 'r_roberta':
-		feature_model = RobertaModel.from_pretrained("xlm-roberta-large", add_pooling_layer=False)
-           model = r_roberta_Classifier(feature_model, dr_rate=args.dp)
-		
+    	feature_model = RobertaModel.from_pretrained("xlm-roberta-large", add_pooling_layer=False)
+        model = r_roberta_Classifier(feature_model, dr_rate=args.dp)
+    
     elif args.model == 'roberta':
-		feature_model = RobertaModel.from_pretrained("xlm-roberta-large", add_pooling_layer=False)
-		model = roberta_Classifier(feature_model)
-	
-	else:
-		raise NotImplementedError('Tokenizer & Model not available')
-	
-	return model
+    	feature_model = RobertaModel.from_pretrained("xlm-roberta-large", add_pooling_layer=False)
+    	model = roberta_Classifier(feature_model)
+
+    else:
+    	raise NotImplementedError('Tokenizer & Model not available')
+
+    return model

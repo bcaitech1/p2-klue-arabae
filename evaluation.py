@@ -7,11 +7,11 @@ from dataloader import *
 from torch.utils.data import DataLoader
 
 
-def load_test_dataset(dataset_dir, tokenizer):
+def load_test_dataset(args, tokenizer):
     if 'ner' in args.test_file:
-        all_dataset = ner_load_data(f"{args.train_dir}/{args.train_file}.tsv")
+        test_dataset = ner_load_data(f"{args.test_dir}/{args.test_file}.tsv")
     else:
-        all_dataset = load_data(f"{args.train_dir}/{args.train_file}.tsv")
+        test_dataset = load_data(f"{args.test_dir}/{args.test_file}.tsv")
 	test_label = test_dataset['label'].values
     
 	# tokenizing dataset
@@ -21,7 +21,7 @@ def load_test_dataset(dataset_dir, tokenizer):
     return tokenized_test, test_label
 
 
-def test_eval(args, model, tokenized_sent):
+def test_eval(model, tokenized_sent):
     testloader = DataLoader(tokenized_sent,
                             shuffle=False)
     model.eval()
@@ -46,7 +46,7 @@ def kfold_test_eval(args, tokenized_sent):
     fold_logits = np.zeros((1000, 42))
     for fold in range(1, 9):
         # load my model
-		model = get_model(args)
+        model = get_model(args)
         load_path = f'./models/{args.model_name}/{fold}-fold/best.pt'
         
         if os.path.isfile(load_path):
@@ -77,8 +77,7 @@ def test_main(args, model, tokenizer):
     """
 
     # load test datset
-    test_dataset_dir = f"{args.test_dir}/test.tsv"
-    test_dataset, test_label = load_test_dataset(test_dataset_dir, tokenizer)
+    test_dataset, test_label = load_test_dataset(args, tokenizer)
     test_dataset = RE_Dataset(test_dataset, test_label)
 
     # predict answer
@@ -94,11 +93,11 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42, help='random seed (default: 42)')
     parser.add_argument('--model', type=str, default='r_roberta', help='model type (kobert, koelectra, multi, roberta, r_roberta; default)')
     parser.add_argument('--test_dir', type=str, default='../input/data/test')
-	parser.add_argument('--test_file', type=str, default='test', help='choose test; default, ner_test')
+    parser.add_argument('--test_file', type=str, default='test', help='choose test; default, ner_test')
     
     parser.add_argument('--model_name', type=str, required=True)
     parser.add_argument('--chkpt_idx', type=int, default=10, help='checkpoint of models for submit')
-	
-	
+    
+    
     args = parser.parse_args()
-	test_main(args)
+    test_main(args)
